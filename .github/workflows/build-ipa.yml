@@ -40,7 +40,11 @@ jobs:
 
       - name: Install build dependencies
         run: |
-          brew install meson ninja pkg-config python@3.12 xcodegen qemu cmake             autoconf automake libtool gettext glib pixman bison coreutils
+          brew install meson ninja pkg-config python@3.12 xcodegen qemu cmake \
+            autoconf automake libtool gettext glib pixman bison coreutils
+          # virglrenderer's Meson configuration imports yaml using Homebrew's
+          # default Python at /opt/homebrew/bin/python3 (not python@3.12).
+          /opt/homebrew/bin/python3 -m pip install --break-system-packages PyYAML==6.0.2
 
       - name: Install Rust and iOS target
         uses: dtolnay/rust-toolchain@stable
