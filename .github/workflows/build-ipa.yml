@@ -1,14 +1,14 @@
-name: Build Husk IPA
+name: Build & Release Husk
 
 on:
   push:
-    branches: [main]
-  pull_request:
-    branches: [main]
+    branches:
+      - main
+      - 'trae/**'
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: build-ipa-${{ github.ref }}
@@ -16,12 +16,13 @@ concurrency:
 
 jobs:
   build:
-    # Husk's native dependencies and packaging scripts require macOS + Xcode.
-    runs-on: macos-14
+    name: Build IPA
+    runs-on: macos-26
     timeout-minutes: 360
     env:
       HOMEBREW_NO_AUTO_UPDATE: "1"
       HOMEBREW_NO_INSTALL_CLEANUP: "1"
+      SDKMINVER: "15.5"
       CARGO_TERM_COLOR: always
 
     steps:
@@ -38,61 +39,60 @@ jobs:
           xcodebuild -version
           xcrun --sdk iphoneos --show-sdk-version
 
-      - name: Install build dependencies
+      - name: Install build tools
         run: |
-          brew install meson ninja pkg-config python@3.12 xcodegen qemu cmake \
+          brew install xcodegen meson ninja pkg-config cmake qemu \
             autoconf automake libtool gettext glib pixman bison coreutils
-          # virglrenderer's Meson configuration imports yaml using Homebrew's
-          # default Python at /opt/homebrew/bin/python3 (not python@3.12).
-          /opt/homebrew/bin/python3 -m pip install --break-system-packages PyYAML==6.0.2
+          python3 -m pip install --break-system-packages pyyaml
 
-      - name: Install Rust and iOS target
+      - name: Rust iOS target
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-apple-ios
 
-      - name: Cache Rust dependencies
+      - name: Cache downloaded sources
+        uses: actions/cache@v4
+        with:
+          path: third_party/sources
+          key: third-party-sources-${{ runner.os }}-${{ hashFiles('scripts/fetch_sources.sh') }}
+          restore-keys: |
+            third-party-sources-${{ runner.os }}-
+
+      - name: Cache native build tree
         uses: actions/cache@v4
         with:
           path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            src/rppairing-ios/target
-          key: ${{ runner.os }}-rust-ios-${{ hashFiles('src/rppairing-ios/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-rust-ios-
-
-      - name: Restore native build cache
-        uses: actions/cache/restore@v4
-        with:
-          path: |
-            third_party/sources
             third_party/build
             third_party/gpu
             build/ios-arm64
             build/stamps
-          key: ${{ runner.os }}-husk-native-${{ github.sha }}
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: build-${{ runner.os }}-${{ hashFiles('scripts/**', 'patches/**', 'src/**') }}
           restore-keys: |
-            ${{ runner.os }}-husk-native-
+            build-${{ runner.os }}-
 
-      - name: Build Husk and package IPA
+      # These private PS4 dependencies are not available to GitHub-hosted CI.
+      # The stub permits packaging/installation but does not enable PS4 game execution.
+      - name: Stub unavailable private PS4 module
+        run: |
+          set -euo pipefail
+          mkdir -p build/ios-arm64/lib
+          cat > /tmp/huskps4_stub.c <<'C'
+          void husk_console_module_v1(void) {}
+          C
+          clang -dynamiclib -o build/ios-arm64/lib/libhuskps4.dylib /tmp/huskps4_stub.c \
+            -target arm64-apple-ios"$SDKMINVER" \
+            -isysroot "$(xcrun --sdk iphoneos --show-sdk-path)" \
+            -install_name @rpath/libhuskps4.dylib
+          echo "CI stub only: PS4 game execution unavailable" > build/ios-arm64/lib/libhuskps4.revision
+
+      - name: Build Husk IPA and TrollStore package
         shell: bash
         run: |
           set -euo pipefail
           chmod +x scripts/*.sh
           ./scripts/ci_build.sh "$GITHUB_WORKSPACE/build/Husk.ipa"
-
-      - name: Save native build cache
-        if: always()
-        uses: actions/cache/save@v4
-        with:
-          path: |
-            third_party/sources
-            third_party/build
-            third_party/gpu
-            build/ios-arm64
-            build/stamps
-          key: ${{ runner.os }}-husk-native-${{ github.sha }}
 
       - name: Verify generated packages
         shell: bash
@@ -107,16 +107,33 @@ jobs:
           echo "IPA: $(du -h build/Husk.ipa | awk '{print $1}')"
           echo "TIPA: $(du -h build/Husk.tipa | awk '{print $1}')"
 
-      - name: Upload IPA and TrollStore package
-        if: success()
+      - name: Upload IPA artifact
         uses: actions/upload-artifact@v4
         with:
-          name: Husk-ipa-${{ github.sha }}
+          name: Husk-${{ github.sha }}
           path: |
             build/Husk.ipa
             build/Husk.tipa
           if-no-files-found: error
           retention-days: 14
+
+      - name: Publish prerelease
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ci-${{ github.sha }}
+          name: Husk build ${{ github.sha }}
+          body: |
+            Automated build from ${{ github.sha }} (${{ github.ref_name }}).
+
+            - `Husk.ipa` — install with AltStore/SideStore (re-signed on install).
+            - `Husk.tipa` — TrollStore package.
+            - PS4 game execution is unavailable in this CI build because private dependencies are replaced with a stub.
+          prerelease: true
+          files: |
+            build/Husk.ipa
+            build/Husk.tipa
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Upload build logs on failure
         if: failure()
