@@ -69,8 +69,6 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
           key: build-${{ runner.os }}-${{ hashFiles('scripts/**', 'patches/**', 'src/**') }}
-          restore-keys: |
-            build-${{ runner.os }}-
 
       # These private PS4 dependencies are not available to GitHub-hosted CI.
       # The stub permits packaging/installation but does not enable PS4 game execution.
