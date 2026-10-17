@@ -67,6 +67,8 @@ echo "==> virglrenderer (render server in thread mode)"
 # constraint that makes QEMU an in-process library here. UTM uses process mode
 # on macOS and thread mode everywhere else for exactly this reason.
 ( cd "$GPU/virgl"
+  # The pinned UTM fork has a declaration immediately after a label, which Clang rejects in C.
+  patch -p1 --silent < "$HUSK_ROOT/patches/husk-virglrenderer-c-label.patch"
   rm -rf _build
   $MESON setup _build --cross-file "$HUSK_ROOT/build/ios-arm64/cross-ios-darwin.meson" \
       --prefix "$PREFIX" --default-library=static \
